@@ -13,29 +13,30 @@ import shutil
 
 locale.setlocale(locale.LC_ALL, '')
 
-PARAMS_FILE = 'params.ckpt'
-TRAIN_LOOP_FILE = 'train_loop.pkl'
-TRAIN_OUTPUT_FILE = 'train_output.ndjson'
-
 def train_loop(
-    session,
-    inputs,
-    cost,
-    train_data,
-    stop_after,
-    prints=[],
-    test_data=None,
-    test_every=None,
-    callback=None,
-    callback_every=None,
-    inject_iteration=False,
-    bn_vars=None,
-    bn_stats_iters=1000,
-    before_test=None,
-    optimizer=tf.train.AdamOptimizer(),
-    save_every=1000,
-    save_checkpoints=False
-    ):
+        session,
+        inputs,
+        cost,
+        train_data,
+        stop_after,
+        prints=[],
+        test_data=None,
+        valid_data=None,
+        test_every=None,
+        callback=None,
+        callback_every=None,
+        inject_iteration=False,
+        bn_vars=None,
+        bn_stats_iters=1000,
+        before_test=None,
+        optimizer=tf.train.AdamOptimizer(),
+        save_every=1000,
+        save_checkpoints=False,
+        savedir = os.getcwd()):
+        
+    PARAMS_FILE = os.path.join(savedir, 'params.ckpt')
+    TRAIN_LOOP_FILE = os.path.join(savedir, 'train_loop.pkl')
+    TRAIN_OUTPUT_FILE = os.path.join(savedir, 'train_output.ndjson')
 
     prints = [('cost', cost)] + prints
 
@@ -126,7 +127,7 @@ def train_loop(
         print "Resuming interrupted train loop session"
         with open(TRAIN_LOOP_FILE, 'r') as f:
             _vars = pickle.load(f)
-        saver.restore(session, os.getcwd()+"/"+PARAMS_FILE)
+        saver.restore(session, PARAMS_FILE)
 
         print "Fast-fowarding dataset generator"
         dataset_iters = 0
@@ -143,16 +144,13 @@ def train_loop(
         print "done!"
 
     train_output_entries = [[]]
-    
-    def log(outputs, test, _vars, extra_things_to_print):
+
+    def log(outputs, name, _vars, extra_things_to_print):
         entry = collections.OrderedDict()
         for key in ['epoch', 'iteration', 'seconds']:
             entry[key] = _vars[key]
         for i,p in enumerate(prints):
-            if test:
-                entry['test '+p[0]] = outputs[i]
-            else:
-                entry['train '+p[0]] = outputs[i]
+            entry[name+ ' ' +p[0]] = outputs[i]
 
         train_output_entries[0].append(entry)
 
@@ -164,7 +162,12 @@ def train_loop(
                 print_str += "{}:{}\t".format(k,v)
             else:
                 print_str += "{}:{:.4f}\t".format(k,v)
-        print print_str[:-1] # omit the last \t
+        if name in ['test', 'valid']:
+            s1 = "-"*80 + '\n'
+            s2 = '\n' + "-"*80
+        else:
+            s1 = s2 = ''
+        print s1+print_str[:-1]+s2 # omit the last \t
 
     def save_train_output_and_params(iteration):
         print "Saving things..."
@@ -228,7 +231,7 @@ def train_loop(
         _vars['seconds'] += run_time
         _vars['iteration'] += 1
 
-        log(outputs, False, _vars, [('iter time', run_time), ('data time', data_load_time)])
+        log(outputs, 'train', _vars, [('iter time', run_time), ('data time', data_load_time)])
 
         if ((test_data is not None) and _vars['iteration'] % test_every == (test_every-1)) or ((callback is not None) and _vars['iteration'] % callback_every == (callback_every-1)):
             if inject_iteration:
@@ -262,15 +265,28 @@ def train_loop(
                         for input_vals in test_data()
                     ]
 
+                    valid_outputs = [
+                        eval_fn([np.int32(_vars['iteration'])] + list(input_vals))
+                        for input_vals in valid_data()
+                    ]
+
                 else:
 
                     test_outputs = [
                         eval_fn(list(input_vals))
                         for input_vals in test_data()
                     ]
-                mean_test_outputs = np.array(test_outputs).mean(axis=0)
 
-                log(mean_test_outputs, True, _vars, [])
+                    valid_outputs = [
+                        eval_fn(list(input_vals))
+                        for input_vals in valid_data()
+                    ]
+
+                mean_test_outputs = np.array(test_outputs).mean(axis=0)
+                mean_valid_outputs = np.array(valid_outputs).mean(axis=0)
+
+                log(mean_test_outputs, 'test', _vars, [])
+                log(mean_valid_outputs, 'valid', _vars, [])
 
             if (callback is not None) and _vars['iteration'] % callback_every == (callback_every-1):
                 tag = "iter{}".format(_vars['iteration'])
