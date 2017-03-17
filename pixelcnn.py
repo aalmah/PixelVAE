@@ -22,7 +22,7 @@ import tflib.ops.conv2d
 import tflib.ops.linear
 import tflib.ops.batchnorm
 import tflib.ops.embedding
-
+from tflib.ops.cost import discretized_mix_logistic_loss
 from tflib import cifar10
 # import tflib.lsun_bedrooms
 # import tflib.mnist256_leave_digit
@@ -36,8 +36,8 @@ from scipy.misc import imsave
 import time
 import functools
 
-DATASET = 'cifar10_32' # mnist_256, lsun_32, lsun_64, imagenet_64
-SETTINGS = '32px_small' # mnist_256, 32px_small, 32px_big, 64px_small, 64px_big
+DATASET = 'cifar10_32'
+SETTINGS = '32px_big'
 
 SAVEDIR = '/Tmp/almahaia/exp/pixelcnn_{}_{}'.format(DATASET, SETTINGS)
 if not os.path.exists(SAVEDIR):
@@ -57,10 +57,8 @@ if SETTINGS == '32px_small':
     DIM_1        = 64
     DIM_2        = 128
     DIM_3        = 256
-    LATENT_DIM_1 = 64
     DIM_PIX_2    = 512
     DIM_4        = 512
-    LATENT_DIM_2 = 512
 
     ALPHA1_ITERS = 2000
     ALPHA2_ITERS = 5000
@@ -80,13 +78,12 @@ if SETTINGS == '32px_small':
     LR_DECAY_AFTER = 180000
     LR_DECAY_FACTOR = 1e-1
 
-    BATCH_SIZE = 64
+    BATCH_SIZE = 100
     N_CHANNELS = 3
     HEIGHT = 32
     WIDTH = 32
 
-    LATENTS1_HEIGHT = 8
-    LATENTS1_WIDTH = 8
+    NR_LOGISTIC_MIX = 10
 
 elif SETTINGS == '32px_big':
 
@@ -103,10 +100,8 @@ elif SETTINGS == '32px_big':
     DIM_1        = 128
     DIM_2        = 256
     DIM_3        = 512
-    LATENT_DIM_1 = 128
     DIM_PIX_2    = 512
     DIM_4        = 512
-    LATENT_DIM_2 = 512
 
     ALPHA1_ITERS = 2000
     ALPHA2_ITERS = 5000
@@ -127,14 +122,13 @@ elif SETTINGS == '32px_big':
     LR_DECAY_AFTER = 300000
     LR_DECAY_FACTOR = 1e-1
 
-    BATCH_SIZE = 64
+    BATCH_SIZE = 100
     N_CHANNELS = 3
     HEIGHT = 32
     WIDTH = 32
-    LATENTS1_HEIGHT = 8
-    LATENTS1_WIDTH = 8
 
-
+    NR_LOGISTIC_MIX = 10
+    
 train_data, valid_data, test_data = cifar10.load(BATCH_SIZE)
 
 lib.print_model_settings(locals().copy())
@@ -148,16 +142,14 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
     bn_is_training = tf.placeholder(tf.bool, shape=None, name='bn_is_training')
     bn_stats_iter = tf.placeholder(tf.int32, shape=None, name='bn_stats_iter')
     total_iters = tf.placeholder(tf.int32, shape=None, name='total_iters')
-    all_images = tf.placeholder(tf.int32, shape=[None, N_CHANNELS, HEIGHT, WIDTH], name='all_images')
-    all_latents1 = tf.placeholder(tf.float32, shape=[None, LATENT_DIM_1, LATENTS1_HEIGHT, LATENTS1_WIDTH], name='all_latents1')
+    all_images = tf.placeholder(tf.int32, shape=[BATCH_SIZE, N_CHANNELS, HEIGHT, WIDTH], name='all_images')
 
     split_images = tf.split(0, len(DEVICES), all_images)
-    split_latents1 = tf.split(0, len(DEVICES), all_latents1)
 
     tower_cost = []
     tower_outputs1_sample = []
 
-    for device_index, (device, images, latents1_sample) in enumerate(zip(DEVICES, split_images, split_latents1)):
+    for device_index, (device, images) in enumerate(zip(DEVICES, split_images)):
         with tf.device(device):
 
             def nonlinearity(x):
@@ -248,15 +240,20 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
                     output = ResidualBlock('Dec1.Pix2Res', input_dim=DIM_1, output_dim=DIM_PIX_1, filter_size=3, mask_type=('b', N_CHANNELS), inputs=output)
                     output = ResidualBlock('Dec1.Pix3Res', input_dim=DIM_PIX_1, output_dim=DIM_PIX_1, filter_size=3, mask_type=('b', N_CHANNELS), inputs=output)
 
-                output = lib.ops.conv2d.Conv2D('Dec1.Out', input_dim=DIM_PIX_1, output_dim=256*N_CHANNELS,
+                # output = lib.ops.conv2d.Conv2D('Dec1.Out', input_dim=DIM_PIX_1, output_dim=256*N_CHANNELS,
+                #                                filter_size=1, mask_type=('b', N_CHANNELS), he_init=False, inputs=output)
+
+                # return tf.transpose(
+                #     tf.reshape(output, [-1, 256, N_CHANNELS, HEIGHT, WIDTH]),
+                #     [0,2,3,4,1]
+                # )
+            
+                output = lib.ops.conv2d.Conv2D('Dec1.Out', input_dim=DIM_PIX_1, output_dim=10*NR_LOGISTIC_MIX,
                                                filter_size=1, mask_type=('b', N_CHANNELS), he_init=False, inputs=output)
 
-                return tf.transpose(
-                    tf.reshape(output, [-1, 256, N_CHANNELS, HEIGHT, WIDTH]),
-                    [0,2,3,4,1]
-                )
+                return tf.transpose(output,[0,2,3,1])
 
-            scaled_images = (tf.cast(images, 'float32') - 128.) / 64.
+            scaled_images = (tf.cast(images, 'float32') - 127.5) / 127.5
             if EMBED_INPUTS:
                 embedded_images = lib.ops.embedding.Embedding('Embedding', 256, DIM_EMBED, images)
                 embedded_images = tf.transpose(embedded_images, [0,4,1,2,3])
@@ -267,12 +264,14 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
             else:
                 outputs1 = Dec1(scaled_images)
 
-            cost = tf.reduce_mean(
-                tf.nn.sparse_softmax_cross_entropy_with_logits(
-                    tf.reshape(outputs1, [-1, 256]),
-                    tf.reshape(images, [-1])
-                )
-            )
+            # cost = tf.reduce_mean(
+            #     tf.nn.sparse_softmax_cross_entropy_with_logits(
+            #         tf.reshape(outputs1, [-1, 256]),
+            #         tf.reshape(images, [-1])
+            #     )
+            # )
+
+            cost = discretized_mix_logistic_loss(tf.transpose(scaled_images, [0,2,3,1]), outputs1) / (BATCH_SIZE * np.prod((N_CHANNELS, HEIGHT, WIDTH)))
 
             tower_cost.append(cost)
 
@@ -282,49 +281,49 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
 
     bpp = full_cost / np.log(2.)
 
-    # Sampling
+    # # Sampling
 
-    ch_sym = tf.placeholder(tf.int32, shape=None)
-    y_sym = tf.placeholder(tf.int32, shape=None)
-    x_sym = tf.placeholder(tf.int32, shape=None)
-    logits = tf.reshape(tf.slice(outputs1, tf.pack([0, ch_sym, y_sym, x_sym, 0]), tf.pack([-1, 1, 1, 1, -1])), [-1, 256])
-    dec1_fn_out = tf.multinomial(logits, 1)[:, 0]
+    # ch_sym = tf.placeholder(tf.int32, shape=None)
+    # y_sym = tf.placeholder(tf.int32, shape=None)
+    # x_sym = tf.placeholder(tf.int32, shape=None)
+    # logits = tf.reshape(tf.slice(outputs1, tf.pack([0, ch_sym, y_sym, x_sym, 0]), tf.pack([-1, 1, 1, 1, -1])), [-1, 256])
+    # dec1_fn_out = tf.multinomial(logits, 1)[:, 0]
 
-    def dec1_fn(_targets, _ch, _y, _x):
-        return session.run(dec1_fn_out, feed_dict={images: _targets, ch_sym: _ch, y_sym: _y, x_sym: _x,
-                                                   total_iters: 99999, bn_is_training: False, bn_stats_iter:0})
+    # def dec1_fn(_targets, _ch, _y, _x):
+    #     return session.run(dec1_fn_out, feed_dict={images: _targets, ch_sym: _ch, y_sym: _y, x_sym: _x,
+    #                                                total_iters: 99999, bn_is_training: False, bn_stats_iter:0})
 
-    def generate_and_save_samples(tag):
-        def color_grid_vis(X, nh, nw, save_path):
-            # from github.com/Newmu
-            X = X.transpose(0,2,3,1)
-            h, w = X[0].shape[:2]
-            img = np.zeros((h*nh, w*nw, 3))
-            for n, x in enumerate(X):
-                j = n / nw
-                i = n % nw
-                img[j*h:j*h+h, i*w:i*w+w, :] = x
-            imsave(save_path, img)
+    # def generate_and_save_samples(tag):
+    #     def color_grid_vis(X, nh, nw, save_path):
+    #         # from github.com/Newmu
+    #         X = X.transpose(0,2,3,1)
+    #         h, w = X[0].shape[:2]
+    #         img = np.zeros((h*nh, w*nw, 3))
+    #         for n, x in enumerate(X):
+    #             j = n / nw
+    #             i = n % nw
+    #             img[j*h:j*h+h, i*w:i*w+w, :] = x
+    #         imsave(save_path, img)
 
-        samples = np.zeros(
-            (64, N_CHANNELS, HEIGHT, WIDTH),
-            dtype='int32'
-        )
+    #     samples = np.zeros(
+    #         (64, N_CHANNELS, HEIGHT, WIDTH),
+    #         dtype='int32'
+    #     )
 
-        print "Generating samples"
-        for y in xrange(HEIGHT):
-            for x in xrange(WIDTH):
-                for ch in xrange(N_CHANNELS):
-                    next_sample = dec1_fn(samples, ch, y, x)
-                    samples[:,ch,y,x] = next_sample
+    #     print "Generating samples"
+    #     for y in xrange(HEIGHT):
+    #         for x in xrange(WIDTH):
+    #             for ch in xrange(N_CHANNELS):
+    #                 next_sample = dec1_fn(samples, ch, y, x)
+    #                 samples[:,ch,y,x] = next_sample
 
-        print "Saving samples"
-        color_grid_vis(
-            samples,
-            8,
-            8,
-            SAVEDIR + '/samples_{}.png'.format(tag)
-        )
+    #     print "Saving samples"
+    #     color_grid_vis(
+    #         samples,
+    #         8,
+    #         8,
+    #         SAVEDIR + '/samples_{}.png'.format(tag)
+    #     )
 
     # Train!
     prints=[
@@ -351,8 +350,8 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
         train_data=train_data,
         test_data=test_data,
         valid_data=valid_data,
-        callback=generate_and_save_samples,
-        callback_every=TIMES['callback_every'],
+        # callback=generate_and_save_samples,
+        # callback_every=TIMES['callback_every'],
         test_every=TIMES['test_every'],
         save_checkpoints=True,
         savedir = SAVEDIR
