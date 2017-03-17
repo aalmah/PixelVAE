@@ -83,6 +83,7 @@ if SETTINGS == '32px_small':
     HEIGHT = 32
     WIDTH = 32
 
+    NEW_COST = False
     NR_LOGISTIC_MIX = 10
 
 elif SETTINGS == '32px_big':
@@ -127,6 +128,7 @@ elif SETTINGS == '32px_big':
     HEIGHT = 32
     WIDTH = 32
 
+    NEW_COST = False
     NR_LOGISTIC_MIX = 10
     
 train_data, valid_data, test_data = cifar10.load(BATCH_SIZE)
@@ -240,18 +242,22 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
                     output = ResidualBlock('Dec1.Pix2Res', input_dim=DIM_1, output_dim=DIM_PIX_1, filter_size=3, mask_type=('b', N_CHANNELS), inputs=output)
                     output = ResidualBlock('Dec1.Pix3Res', input_dim=DIM_PIX_1, output_dim=DIM_PIX_1, filter_size=3, mask_type=('b', N_CHANNELS), inputs=output)
 
-                # output = lib.ops.conv2d.Conv2D('Dec1.Out', input_dim=DIM_PIX_1, output_dim=256*N_CHANNELS,
-                #                                filter_size=1, mask_type=('b', N_CHANNELS), he_init=False, inputs=output)
+                if NEW_COST:
+                
+                    output = lib.ops.conv2d.Conv2D('Dec1.Out', input_dim=DIM_PIX_1, output_dim=10*NR_LOGISTIC_MIX,
+                                                   filter_size=1, mask_type=('b', N_CHANNELS), he_init=False, inputs=output)
 
-                # return tf.transpose(
-                #     tf.reshape(output, [-1, 256, N_CHANNELS, HEIGHT, WIDTH]),
-                #     [0,2,3,4,1]
-                # )
-            
-                output = lib.ops.conv2d.Conv2D('Dec1.Out', input_dim=DIM_PIX_1, output_dim=10*NR_LOGISTIC_MIX,
-                                               filter_size=1, mask_type=('b', N_CHANNELS), he_init=False, inputs=output)
+                    return tf.transpose(output,[0,2,3,1])
+                else:
+                    
+                    output = lib.ops.conv2d.Conv2D('Dec1.Out', input_dim=DIM_PIX_1, output_dim=256*N_CHANNELS,
+                                                   filter_size=1, mask_type=('b', N_CHANNELS), he_init=False, inputs=output)
 
-                return tf.transpose(output,[0,2,3,1])
+                    return tf.transpose(
+                        tf.reshape(output, [-1, 256, N_CHANNELS, HEIGHT, WIDTH]),
+                        [0,2,3,4,1]
+                    )
+
 
             scaled_images = (tf.cast(images, 'float32') - 127.5) / 127.5
             if EMBED_INPUTS:
@@ -264,14 +270,15 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
             else:
                 outputs1 = Dec1(scaled_images)
 
-            # cost = tf.reduce_mean(
-            #     tf.nn.sparse_softmax_cross_entropy_with_logits(
-            #         tf.reshape(outputs1, [-1, 256]),
-            #         tf.reshape(images, [-1])
-            #     )
-            # )
-
-            cost = discretized_mix_logistic_loss(tf.transpose(scaled_images, [0,2,3,1]), outputs1) / (BATCH_SIZE * np.prod((N_CHANNELS, HEIGHT, WIDTH)))
+            if NEW_COST:
+                cost = discretized_mix_logistic_loss(tf.transpose(scaled_images, [0,2,3,1]), outputs1) / (BATCH_SIZE * np.prod((N_CHANNELS, HEIGHT, WIDTH)))
+            else:
+                cost = tf.reduce_mean(
+                    tf.nn.sparse_softmax_cross_entropy_with_logits(
+                        tf.reshape(outputs1, [-1, 256]),
+                        tf.reshape(images, [-1])
+                    )
+                )                
 
             tower_cost.append(cost)
 
@@ -279,51 +286,55 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
         tf.concat(0, [tf.expand_dims(x, 0) for x in tower_cost]), 0
     )
 
-    bpp = full_cost / np.log(2.)
+    if NEW_COST:
+        bpp = full_cost / np.log(2.)
+    else:
+        bpp = full_cost / (np.prod((N_CHANNELS, HEIGHT, WIDTH)) * np.log(2.))
 
-    # # Sampling
+    # Sampling
 
-    # ch_sym = tf.placeholder(tf.int32, shape=None)
-    # y_sym = tf.placeholder(tf.int32, shape=None)
-    # x_sym = tf.placeholder(tf.int32, shape=None)
-    # logits = tf.reshape(tf.slice(outputs1, tf.pack([0, ch_sym, y_sym, x_sym, 0]), tf.pack([-1, 1, 1, 1, -1])), [-1, 256])
-    # dec1_fn_out = tf.multinomial(logits, 1)[:, 0]
-
-    # def dec1_fn(_targets, _ch, _y, _x):
-    #     return session.run(dec1_fn_out, feed_dict={images: _targets, ch_sym: _ch, y_sym: _y, x_sym: _x,
-    #                                                total_iters: 99999, bn_is_training: False, bn_stats_iter:0})
-
-    # def generate_and_save_samples(tag):
-    #     def color_grid_vis(X, nh, nw, save_path):
-    #         # from github.com/Newmu
-    #         X = X.transpose(0,2,3,1)
-    #         h, w = X[0].shape[:2]
-    #         img = np.zeros((h*nh, w*nw, 3))
-    #         for n, x in enumerate(X):
-    #             j = n / nw
-    #             i = n % nw
-    #             img[j*h:j*h+h, i*w:i*w+w, :] = x
-    #         imsave(save_path, img)
-
-    #     samples = np.zeros(
-    #         (64, N_CHANNELS, HEIGHT, WIDTH),
-    #         dtype='int32'
-    #     )
-
-    #     print "Generating samples"
-    #     for y in xrange(HEIGHT):
-    #         for x in xrange(WIDTH):
-    #             for ch in xrange(N_CHANNELS):
-    #                 next_sample = dec1_fn(samples, ch, y, x)
-    #                 samples[:,ch,y,x] = next_sample
-
-    #     print "Saving samples"
-    #     color_grid_vis(
-    #         samples,
-    #         8,
-    #         8,
-    #         SAVEDIR + '/samples_{}.png'.format(tag)
-    #     )
+    if not NEW_COST:
+        ch_sym = tf.placeholder(tf.int32, shape=None)
+        y_sym = tf.placeholder(tf.int32, shape=None)
+        x_sym = tf.placeholder(tf.int32, shape=None)
+        logits = tf.reshape(tf.slice(outputs1, tf.pack([0, ch_sym, y_sym, x_sym, 0]), tf.pack([-1, 1, 1, 1, -1])), [-1, 256])
+        dec1_fn_out = tf.multinomial(logits, 1)[:, 0]
+    
+        def dec1_fn(_targets, _ch, _y, _x):
+            return session.run(dec1_fn_out, feed_dict={images: _targets, ch_sym: _ch, y_sym: _y, x_sym: _x,
+                                                       total_iters: 99999, bn_is_training: False, bn_stats_iter:0})
+    
+        def generate_and_save_samples(tag):
+            def color_grid_vis(X, nh, nw, save_path):
+                # from github.com/Newmu
+                X = X.transpose(0,2,3,1)
+                h, w = X[0].shape[:2]
+                img = np.zeros((h*nh, w*nw, 3))
+                for n, x in enumerate(X):
+                    j = n / nw
+                    i = n % nw
+                    img[j*h:j*h+h, i*w:i*w+w, :] = x
+                imsave(save_path, img)
+    
+            samples = np.zeros(
+                (64, N_CHANNELS, HEIGHT, WIDTH),
+                dtype='int32'
+            )
+    
+            print "Generating samples"
+            for y in xrange(HEIGHT):
+                for x in xrange(WIDTH):
+                    for ch in xrange(N_CHANNELS):
+                        next_sample = dec1_fn(samples, ch, y, x)
+                        samples[:,ch,y,x] = next_sample
+    
+            print "Saving samples"
+            color_grid_vis(
+                samples,
+                8,
+                8,
+                SAVEDIR + '/samples_{}.png'.format(tag)
+            )
 
     # Train!
     prints=[
@@ -338,21 +349,42 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
         staircase=True
     )
 
-    lib.train_loop_2.train_loop(
-        session=session,
-        inputs=[total_iters, all_images],
-        inject_iteration=True,
-        bn_vars=(bn_is_training, bn_stats_iter),
-        cost=full_cost,
-        stop_after=TIMES['stop_after'],
-        prints=prints,
-        optimizer=tf.train.AdamOptimizer(decayed_lr),
-        train_data=train_data,
-        test_data=test_data,
-        valid_data=valid_data,
-        # callback=generate_and_save_samples,
-        # callback_every=TIMES['callback_every'],
-        test_every=TIMES['test_every'],
-        save_checkpoints=True,
-        savedir = SAVEDIR
-    )
+    if NEW_COST:
+        lib.train_loop_2.train_loop(
+            session=session,
+            inputs=[total_iters, all_images],
+            inject_iteration=True,
+            bn_vars=(bn_is_training, bn_stats_iter),
+            cost=full_cost,
+            stop_after=TIMES['stop_after'],
+            prints=prints,
+            optimizer=tf.train.AdamOptimizer(decayed_lr),
+            train_data=train_data,
+            test_data=test_data,
+            valid_data=valid_data,
+            # callback=generate_and_save_samples,
+            # callback_every=TIMES['callback_every'],
+            test_every=TIMES['test_every'],
+            save_checkpoints=True,
+            savedir = SAVEDIR
+        )
+    else:
+        lib.train_loop_2.train_loop(
+            session=session,
+            inputs=[total_iters, all_images],
+            inject_iteration=True,
+            bn_vars=(bn_is_training, bn_stats_iter),
+            cost=full_cost,
+            stop_after=TIMES['stop_after'],
+            prints=prints,
+            optimizer=tf.train.AdamOptimizer(decayed_lr),
+            train_data=train_data,
+            test_data=test_data,
+            valid_data=valid_data,
+            callback=generate_and_save_samples,
+            callback_every=TIMES['callback_every'],
+            test_every=TIMES['test_every'],
+            save_checkpoints=True,
+            savedir = SAVEDIR
+        )
+        
