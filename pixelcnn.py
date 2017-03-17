@@ -258,7 +258,6 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
                         [0,2,3,4,1]
                     )
 
-
             scaled_images = (tf.cast(images, 'float32') - 127.5) / 127.5
             if EMBED_INPUTS:
                 embedded_images = lib.ops.embedding.Embedding('Embedding', 256, DIM_EMBED, images)
@@ -271,14 +270,16 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
                 outputs1 = Dec1(scaled_images)
 
             if NEW_COST:
-                cost = discretized_mix_logistic_loss(tf.transpose(scaled_images, [0,2,3,1]), outputs1) / (BATCH_SIZE * np.prod((N_CHANNELS, HEIGHT, WIDTH)))
+                sum_cost = discretized_mix_logistic_loss(tf.transpose(scaled_images, [0,2,3,1]), outputs1)
+                cost = sum_cost / (BATCH_SIZE * np.prod((N_CHANNELS, HEIGHT, WIDTH)))
             else:
-                cost = tf.reduce_mean(
+                sum_cost = tf.reduce_sum(
                     tf.nn.sparse_softmax_cross_entropy_with_logits(
                         tf.reshape(outputs1, [-1, 256]),
                         tf.reshape(images, [-1])
                     )
-                )                
+                )
+                cost = sum_cost / (BATCH_SIZE * np.prod((N_CHANNELS, HEIGHT, WIDTH)))
 
             tower_cost.append(cost)
 
@@ -286,11 +287,8 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
         tf.concat(0, [tf.expand_dims(x, 0) for x in tower_cost]), 0
     )
 
-    if NEW_COST:
-        bpp = full_cost / np.log(2.)
-    else:
-        bpp = full_cost / (np.prod((N_CHANNELS, HEIGHT, WIDTH)) * np.log(2.))
-
+    bpp = full_cost / np.log(2.)
+    
     # Sampling
 
     if not NEW_COST:
@@ -338,7 +336,7 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
 
     # Train!
     prints=[
-        ('BPP', bpp),
+        ('BPP', bpp)
     ]
 
     decayed_lr = tf.train.exponential_decay(
