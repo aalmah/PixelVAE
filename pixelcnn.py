@@ -144,7 +144,7 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
     bn_is_training = tf.placeholder(tf.bool, shape=None, name='bn_is_training')
     bn_stats_iter = tf.placeholder(tf.int32, shape=None, name='bn_stats_iter')
     total_iters = tf.placeholder(tf.int32, shape=None, name='total_iters')
-    all_images = tf.placeholder(tf.int32, shape=[BATCH_SIZE, N_CHANNELS, HEIGHT, WIDTH], name='all_images')
+    all_images = tf.placeholder(tf.int32, shape=[None, N_CHANNELS, HEIGHT, WIDTH], name='all_images')
 
     split_images = tf.split(0, len(DEVICES), all_images)
 
@@ -270,7 +270,7 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
                 outputs1 = Dec1(scaled_images)
 
             if NEW_COST:
-                sum_cost = discretized_mix_logistic_loss(tf.transpose(scaled_images, [0,2,3,1]), outputs1)
+                sum_cost = discretized_mix_logistic_loss(tf.transpose(scaled_images, [0,2,3,1]), outputs1, BATCH_SIZE)
                 cost = sum_cost / (BATCH_SIZE * np.prod((N_CHANNELS, HEIGHT, WIDTH)))
             else:
                 sum_cost = tf.reduce_sum(
@@ -315,7 +315,7 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
                 imsave(save_path, img)
     
             samples = np.zeros(
-                (64, N_CHANNELS, HEIGHT, WIDTH),
+                (16, N_CHANNELS, HEIGHT, WIDTH),
                 dtype='int32'
             )
     
@@ -329,8 +329,8 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
             print "Saving samples"
             color_grid_vis(
                 samples,
-                8,
-                8,
+                4,
+                4,
                 SAVEDIR + '/samples_{}.png'.format(tag)
             )
 

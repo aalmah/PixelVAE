@@ -1,8 +1,8 @@
 import numpy as np
 import tensorflow as tf
 
-def int_shape(x):
-    return list(map(int, x.get_shape()))
+def int_shape(x, batch_size):
+    return [batch_size] + [int(s) for s in x.get_shape()[1:]]
 
 def concat_elu(x):
     """ like concatenated ReLU (http://arxiv.org/abs/1603.05201), but then with ELU """
@@ -22,10 +22,10 @@ def log_prob_from_logits(x):
     m = tf.reduce_max(x, axis, keep_dims=True)
     return x - m - tf.log(tf.reduce_sum(tf.exp(x-m), axis, keep_dims=True))
 
-def discretized_mix_logistic_loss(x,l,sum_all=True, pixel_wise=False):
+def discretized_mix_logistic_loss(x,l,batch_size, sum_all=True, pixel_wise=False):
     """ log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval """
-    xs = int_shape(x) # true image (i.e. labels) to regress to, e.g. (B,32,32,3)
-    ls = int_shape(l) # predicted distribution, e.g. (B,32,32,100)
+    xs = int_shape(x, batch_size) # true image (i.e. labels) to regress to, e.g. (B,32,32,3)
+    ls = int_shape(l, batch_size) # predicted distribution, e.g. (B,32,32,100)
     nr_mix = int(ls[-1] / 10) # here and below: unpacking the params of the mixture of logistics
     logit_probs = l[:,:,:,:nr_mix]
     l = tf.reshape(l[:,:,:,nr_mix:], xs + [nr_mix*3])
