@@ -20,6 +20,7 @@ def train_loop(
         train_data,
         stop_after,
         prints=[],
+        logs=[],
         test_data=None,
         valid_data=None,
         test_every=None,
@@ -91,6 +92,16 @@ def train_loop(
             [p[1] for p in prints] + [train_op],
             feed_dict=feed_dict
         )[:-1]
+
+    def log_fn(input_vals):
+        feed_dict = {sym:real for sym, real in zip(inputs, input_vals)}
+        if bn_vars is not None:
+            feed_dict[bn_vars[0]] = True
+            feed_dict[bn_vars[1]] = 0
+        return session.run(
+            [p[1] for p in logs],
+            feed_dict=feed_dict
+        )
 
     def bn_stats_fn(input_vals, iter_):
         feed_dict = {sym:real for sym, real in zip(inputs, input_vals)}
@@ -226,11 +237,13 @@ def train_loop(
 
         start_time = time.time()
         outputs = train_fn(input_vals)
+        logs_val = log_fn(input_vals)
         run_time = time.time() - start_time
 
         _vars['seconds'] += run_time
         _vars['iteration'] += 1
 
+        np.savez("iter_%d_log" % _vars['iteration'], pixel_grad=logs_val)
         log(outputs, 'train', _vars, [('iter time', run_time), ('data time', data_load_time)])
 
         if ((test_data is not None) and _vars['iteration'] % test_every == (test_every-1)) or ((callback is not None) and _vars['iteration'] % callback_every == (callback_every-1)):

@@ -39,7 +39,7 @@ import functools
 DATASET = 'cifar10_32'
 SETTINGS = '32px_big'
 
-SAVEDIR = '/Tmp/almahaia/exp/pixelcnn_{}_{}'.format(DATASET, SETTINGS)
+SAVEDIR = '/Tmp/almahaia/exp/pixelcnn_{}_debug'.format(DATASET)
 if not os.path.exists(SAVEDIR):
     os.makedirs(SAVEDIR)
 
@@ -69,7 +69,7 @@ if SETTINGS == '32px_small':
 
     TIMES = {
         'test_every': 1000,
-        'stop_after': 200000,
+        'stop_after': 20,
         'callback_every': 20000
     }
 
@@ -113,7 +113,7 @@ elif SETTINGS == '32px_big':
 
     TIMES = {
         'test_every': 1000,
-        'stop_after': 300000,
+        'stop_after': 5,
         'callback_every': 20000
     }
 
@@ -217,46 +217,34 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
 
             def Dec1(images):
 
-                if WIDTH == 64:
-                    if EMBED_INPUTS:
-                        masked_images = lib.ops.conv2d.Conv2D('Dec1.Pix1', input_dim=N_CHANNELS*DIM_EMBED, output_dim=DIM_0,
-                                                              filter_size=5, inputs=images, mask_type=('a', N_CHANNELS), he_init=False)
-                    else:
-                        masked_images = lib.ops.conv2d.Conv2D('Dec1.Pix1', input_dim=N_CHANNELS, output_dim=DIM_0,
-                                                              filter_size=5, inputs=images, mask_type=('a', N_CHANNELS), he_init=False)
+                if EMBED_INPUTS:
+                    masked_images = lib.ops.conv2d.Conv2D('Dec1.Pix1', input_dim=N_CHANNELS*DIM_EMBED, output_dim=DIM_1,
+                                                          filter_size=5, inputs=images, mask_type=('a', N_CHANNELS), he_init=False)
                 else:
-                    if EMBED_INPUTS:
-                        masked_images = lib.ops.conv2d.Conv2D('Dec1.Pix1', input_dim=N_CHANNELS*DIM_EMBED, output_dim=DIM_1,
-                                                              filter_size=5, inputs=images, mask_type=('a', N_CHANNELS), he_init=False)
-                    else:
-                        masked_images = lib.ops.conv2d.Conv2D('Dec1.Pix1', input_dim=N_CHANNELS, output_dim=DIM_1,
-                                                              filter_size=5, inputs=images, mask_type=('a', N_CHANNELS), he_init=False)
+                    masked_images = lib.ops.conv2d.Conv2D('Dec1.Pix1', input_dim=N_CHANNELS, output_dim=DIM_1,
+                                                          filter_size=5, inputs=images, mask_type=('a', N_CHANNELS), he_init=False)
 
                 output = masked_images
 
-                if WIDTH == 64:
-                    output = ResidualBlock('Dec1.Pix2Res', input_dim=DIM_0, output_dim=DIM_PIX_1, filter_size=3, mask_type=('b', N_CHANNELS), inputs=output)
-                    output = ResidualBlock('Dec1.Pix3Res', input_dim=DIM_PIX_1, output_dim=DIM_PIX_1, filter_size=3, mask_type=('b', N_CHANNELS), inputs=output)
-                    output = ResidualBlock('Dec1.Pix4Res', input_dim=DIM_PIX_1, output_dim=DIM_PIX_1, filter_size=3, mask_type=('b', N_CHANNELS), inputs=output)
-                else:
-                    output = ResidualBlock('Dec1.Pix2Res', input_dim=DIM_1, output_dim=DIM_PIX_1, filter_size=3, mask_type=('b', N_CHANNELS), inputs=output)
-                    output = ResidualBlock('Dec1.Pix3Res', input_dim=DIM_PIX_1, output_dim=DIM_PIX_1, filter_size=3, mask_type=('b', N_CHANNELS), inputs=output)
+                output = ResidualBlock('Dec1.Pix2Res', input_dim=DIM_1, output_dim=DIM_PIX_1, filter_size=3, mask_type=('b', N_CHANNELS), inputs=output)
+                # output = ResidualBlock('Dec1.Pix3Res', input_dim=DIM_PIX_1, output_dim=DIM_PIX_1, filter_size=3, mask_type=('b', N_CHANNELS), inputs=output)
 
                 if NEW_COST:
                 
                     output = lib.ops.conv2d.Conv2D('Dec1.Out', input_dim=DIM_PIX_1, output_dim=10*NR_LOGISTIC_MIX,
                                                    filter_size=1, mask_type=('b', N_CHANNELS), he_init=False, inputs=output)
 
-                    return tf.transpose(output,[0,2,3,1])
+                    channel_dim = [3]
+                    return tf.transpose(output,[0,2,3,1]), channel_dim
                 else:
                     
                     output = lib.ops.conv2d.Conv2D('Dec1.Out', input_dim=DIM_PIX_1, output_dim=256*N_CHANNELS,
                                                    filter_size=1, mask_type=('b', N_CHANNELS), he_init=False, inputs=output)
-
+                    channel_dim = [1,4]
                     return tf.transpose(
                         tf.reshape(output, [-1, 256, N_CHANNELS, HEIGHT, WIDTH]),
                         [0,2,3,4,1]
-                    )
+                    ), channel_dim
 
             scaled_images = (tf.cast(images, 'float32') - 127.5) / 127.5
             if EMBED_INPUTS:
@@ -265,9 +253,9 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
                 embedded_images = tf.reshape(embedded_images, [-1, DIM_EMBED*N_CHANNELS, HEIGHT, WIDTH])
 
             if EMBED_INPUTS:
-                outputs1 = Dec1(embedded_images)
+                outputs1, channel_dim = Dec1(embedded_images)
             else:
-                outputs1 = Dec1(scaled_images)
+                outputs1, channel_dim = Dec1(scaled_images)
 
             if NEW_COST:
                 sum_cost = discretized_mix_logistic_loss(tf.transpose(scaled_images, [0,2,3,1]), outputs1, BATCH_SIZE)
@@ -288,7 +276,14 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
     )
 
     bpp = full_cost / np.log(2.)
+    pixel_wise_output = tf.reduce_sum(outputs1, channel_dim)
     
+    tf_pixel = tf.constant([15, 15], shape=(1,2))
+    tf_pixel = tf.tile(tf_pixel, [BATCH_SIZE,1])
+    batch_idx = tf.concat_v2([tf.reshape(tf.range(BATCH_SIZE),[BATCH_SIZE,1]), tf_pixel], 1)
+    pixel_output = tf.gather_nd(pixel_wise_output, batch_idx)
+    pixel_output_grad = tf.gradients(pixel_output, scaled_images)[0]
+
     # Sampling
 
     if not NEW_COST:
@@ -339,6 +334,10 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
         ('BPP', bpp)
     ]
 
+    logs=[
+        ('pixel_grad', pixel_output_grad)
+    ]
+
     decayed_lr = tf.train.exponential_decay(
         LR,
         total_iters,
@@ -356,6 +355,7 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
             cost=full_cost,
             stop_after=TIMES['stop_after'],
             prints=prints,
+            logs=logs,
             optimizer=tf.train.AdamOptimizer(decayed_lr),
             train_data=train_data,
             test_data=test_data,
@@ -375,6 +375,7 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
             cost=full_cost,
             stop_after=TIMES['stop_after'],
             prints=prints,
+            logs=logs,
             optimizer=tf.train.AdamOptimizer(decayed_lr),
             train_data=train_data,
             test_data=test_data,
