@@ -175,20 +175,9 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
                 if mask_type is not None and resample is not None:
                     raise Exception('Unsupported configuration')
 
-                if resample=='down':
-                    conv_shortcut = functools.partial(lib.ops.conv2d.Conv2D, stride=2)
-                    conv_1        = functools.partial(lib.ops.conv2d.Conv2D, input_dim=input_dim, output_dim=input_dim)
-                    conv_2        = functools.partial(lib.ops.conv2d.Conv2D, input_dim=input_dim, output_dim=output_dim, stride=2)
-                elif resample=='up':
-                    conv_shortcut = SubpixelConv2D
-                    conv_1        = functools.partial(SubpixelConv2D, input_dim=input_dim, output_dim=output_dim)
-                    conv_2        = functools.partial(lib.ops.conv2d.Conv2D, input_dim=output_dim, output_dim=output_dim)
-                elif resample is None:
-                    conv_shortcut = lib.ops.conv2d.Conv2D
-                    conv_1        = functools.partial(lib.ops.conv2d.Conv2D, input_dim=input_dim, output_dim=output_dim)
-                    conv_2        = functools.partial(lib.ops.conv2d.Conv2D, input_dim=output_dim, output_dim=output_dim)
-                else:
-                    raise Exception('invalid resample value')
+                conv_shortcut = lib.ops.conv2d.Conv2D
+                conv_1        = functools.partial(lib.ops.conv2d.Conv2D, input_dim=input_dim, output_dim=output_dim)
+                conv_2        = functools.partial(lib.ops.conv2d.Conv2D, input_dim=output_dim, output_dim=output_dim)
 
                 if output_dim==input_dim and resample is None:
                     shortcut = inputs # Identity skip-connection
@@ -211,9 +200,11 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
                     output_a = conv_1(name+'.Conv1A', filter_size=filter_size, mask_type=mask_type, inputs=output, he_init=he_init)
                     output_b = conv_1(name+'.Conv1B', filter_size=filter_size, mask_type=mask_type, inputs=output, he_init=he_init)
                     output = pixcnn_gated_nonlinearity(output_a, output_b)
-                    output = conv_2(name+'.Conv2', filter_size=filter_size, mask_type=mask_type, inputs=output, he_init=he_init)
-
-                return shortcut + output
+                    output = lib.ops.conv2d.Conv2D(name+'.Conv2', filter_size=filter_size, mask_type=mask_type, inputs=output,
+                                                   he_init=he_init, input_dim=output_dim, output_dim=output_dim)
+                    # output = output
+                # return shortcut + output
+                return output + shortcut
 
             def Dec1(images):
 
@@ -225,19 +216,24 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
                                                           filter_size=5, inputs=images, mask_type=('a', N_CHANNELS), he_init=False)
 
                 output = masked_images
+                # output = lib.ops.conv2d.Conv2D('Dec1.Pix2', input_dim=DIM_1, output_dim=DIM_1,
+                #                                filter_size=3, inputs=output, mask_type=('b', N_CHANNELS), he_init=False)
+                # output = lib.ops.conv2d.Conv2D('Dec1.Pix2', input_dim=DIM_1, output_dim=DIM_1,
+                #                                filter_size=3, inputs=output, mask_type=('b', N_CHANNELS), he_init=False)
+                output = lib.ops.conv2d.Conv2D('Dec1.Pix3', input_dim=DIM_1, output_dim=DIM_PIX_1,
+                                               filter_size=5, inputs=output, mask_type=('b', N_CHANNELS), he_init=False)
 
-                output = ResidualBlock('Dec1.Pix2Res', input_dim=DIM_1, output_dim=DIM_PIX_1, filter_size=3, mask_type=('b', N_CHANNELS), inputs=output)
+                # output = ResidualBlock('Dec1.Pix2Res', input_dim=DIM_1, output_dim=DIM_PIX_1, filter_size=3, mask_type=('b', N_CHANNELS), inputs=output)
                 # output = ResidualBlock('Dec1.Pix3Res', input_dim=DIM_PIX_1, output_dim=DIM_PIX_1, filter_size=3, mask_type=('b', N_CHANNELS), inputs=output)
 
                 if NEW_COST:
-                
                     output = lib.ops.conv2d.Conv2D('Dec1.Out', input_dim=DIM_PIX_1, output_dim=10*NR_LOGISTIC_MIX,
                                                    filter_size=1, mask_type=('b', N_CHANNELS), he_init=False, inputs=output)
 
                     channel_dim = [3]
                     return tf.transpose(output,[0,2,3,1]), channel_dim
                 else:
-                    
+
                     output = lib.ops.conv2d.Conv2D('Dec1.Out', input_dim=DIM_PIX_1, output_dim=256*N_CHANNELS,
                                                    filter_size=1, mask_type=('b', N_CHANNELS), he_init=False, inputs=output)
                     channel_dim = [1,4]
